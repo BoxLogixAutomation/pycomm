@@ -436,7 +436,7 @@ class Driver(Base):
             # Get the data type
             if self._status[0] == SUCCESS:
                 data_type = unpack_uint(self._reply[50:52])
-                typ = DATA_TYPE[data_type]
+                typ = I_DATA_TYPE[data_type]
                 try:
                     value = UNPACK_DATA_FUNCTION[typ](self._reply[52:])
                     if bit is not None:
