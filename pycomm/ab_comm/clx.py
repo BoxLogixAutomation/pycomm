@@ -24,6 +24,7 @@
 # SOFTWARE.
 #
 from pycomm.cip.cip_base import *
+from collections import defaultdict
 import logging
 
 try:  # Python 2.7+
