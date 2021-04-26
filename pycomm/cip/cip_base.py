@@ -26,9 +26,8 @@
 
 import struct
 import socket
-import random
 
-from os import getpid
+from os import getpid, urandom
 from pycomm.cip.cip_const import *
 from pycomm.common import PycommError
 
@@ -75,6 +74,11 @@ def pack_dint(n):
     return struct.pack('<i', n)
 
 
+def pack_udint(n):
+    """pack 32 bit into 4 bytes little endian"""
+    return struct.pack('<I', n)
+
+
 def pack_real(r):
     """unpack 4 bytes little endian to int"""
     return struct.pack('<f', r)
@@ -86,17 +90,15 @@ def pack_lint(l):
 
 
 def unpack_bool(st):
-    if not (int(struct.unpack('B', st[0])[0]) == 0):
-        return 1
-    return 0
+    return 1 if not st[0] == 0 else 0
 
 
 def unpack_sint(st):
-    return int(struct.unpack('b', st[0])[0])
+    return int(struct.unpack('b', bytes([st[0]]))[0])
 
 
 def unpack_usint(st):
-    return int(struct.unpack('B', st[0])[0])
+    return int(struct.unpack('B', bytes([st[0]]))[0])
 
 
 def unpack_int(st):
@@ -202,10 +204,11 @@ PACK_PCCC_DATA_FUNCTION = {
     'I': pack_int
 }
 
+
 def print_bytes_line(msg):
     out = ''
     for ch in msg:
-        out += "{:0>2x}".format(ord(ch))
+        out += "{:0>2x}".format(ch)
     return out
 
 
@@ -218,7 +221,7 @@ def print_bytes_msg(msg, info=''):
         if new_line:
             out += "\n({:0>4d}) ".format(line * 10)
             new_line = False
-        out += "{:0>2x} ".format(ord(ch))
+        out += "{:0>2x} ".format(ch)
         if column == 9:
             new_line = True
             column = 0
@@ -263,32 +266,31 @@ def create_tag_rp(tag, multi_requests=False):
     It returns the request packed wrapped around the tag passed.
     If any error it returns none
     """
-    tags = tag.split('.')
+    tags = tag.encode().split(b'.')
     rp = []
     index = []
     for tag in tags:
         add_index = False
         # Check if is an array tag
-        if tag.find('[') != -1:
+        if b'[' in tag:
             # Remove the last square bracket
             tag = tag[:len(tag)-1]
             # Isolate the value inside bracket
-            inside_value = tag[tag.find('[')+1:]
+            inside_value = tag[tag.find(b'[')+1:]
             # Now split the inside value in case part of multidimensional array
-            index = inside_value.split(',')
+            index = inside_value.split(b',')
             # Flag the existence of one o more index
             add_index = True
             # Get only the tag part
-            tag = tag[:tag.find('[')]
+            tag = tag[:tag.find(b'[')]
         tag_length = len(tag)
 
         # Create the request path
         rp.append(EXTENDED_SYMBOL)  # ANSI Ext. symbolic segment
-        rp.append(chr(tag_length))  # Length of the tag
+        rp.append(bytes([tag_length]))  # Length of the tag
 
         # Add the tag to the Request path
-        for char in tag:
-            rp.append(char)
+        rp += [bytes([char]) for char in tag]
         # Add pad byte because total length of Request path must be word-aligned
         if tag_length % 2:
             rp.append(PADDING_BYTE)
@@ -311,9 +313,9 @@ def create_tag_rp(tag, multi_requests=False):
 
     # At this point the Request Path is completed,
     if multi_requests:
-        request_path = chr(len(rp)/2) + ''.join(rp)
+        request_path = bytes([len(rp)//2]) + b''.join(rp)
     else:
-        request_path = ''.join(rp)
+        request_path = b''.join(rp)
     return request_path
 
 
@@ -344,7 +346,7 @@ def build_multiple_service(rp_list, sequence=None):
     if sequence is not None:
         mr.append(pack_uint(sequence))
 
-    mr.append(chr(TAG_SERVICES_REQUEST["Multiple Service Packet"]))  # the Request Service
+    mr.append(bytes([TAG_SERVICES_REQUEST["Multiple Service Packet"]]))  # the Request Service
     mr.append(pack_usint(2))                 # the Request Path Size length in word
     mr.append(CLASS_ID["8-bit"])
     mr.append(CLASS_CODE["Message Router"])
@@ -457,7 +459,7 @@ class Socket:
                 bytes_recd += len(chunk)
             except socket.error as e:
                 raise CommError(e)
-        return ''.join(chunks)
+        return b''.join(chunks)
 
     def close(self):
         self.sock.close()
@@ -477,7 +479,6 @@ def parse_symbol_type(symbol):
 
 class Base(object):
     _sequence = 0
-
 
     def __init__(self):
         if Base._sequence == 0:
@@ -506,9 +507,22 @@ class Base(object):
         self._status = (0, "")
         self._output_raw = False    # indicating value should be output as raw (hex)
 
-        self.attribs = {'context': '_pycomm_', 'protocol version': 1, 'rpi': 5000, 'port': 0xAF12, 'timeout': 10,
-                        'backplane': 1, 'cpu slot': 0, 'option': 0, 'cid': '\x27\x04\x19\x71', 'csn': '\x27\x04',
-                        'vid': '\x09\x10', 'vsn': '\x09\x10\x19\x71', 'name': 'Base', 'ip address': None}
+        self.attribs = {
+                'context':          '_pycomm_',
+                'protocol version': 1,
+                'rpi':              5000,
+                'port':             0xAF12,
+                'timeout':          10,
+                'backplane':        1,
+                'cpu slot':         0,
+                'option':           0,
+                'cid':              b'\x27\x04\x19\x71',
+                'csn':              b'\x27\x04',
+                'vid':              b'\x09\x10',
+                'vsn':              b'\x09\x10\x19\x71',
+                'name':             'Base',
+                'ip address':       None,
+                'large forward open': False}
 
     def __len__(self):
         return len(self.attribs)
@@ -558,12 +572,14 @@ class Base(object):
         return self._device_description
 
     def generate_cid(self):
-        self.attribs['cid'] = '{0}{1}{2}{3}'.format(chr(random.randint(0, 255)), chr(random.randint(0, 255))
-                                                    , chr(random.randint(0, 255)), chr(random.randint(0, 255)))
+        #self.attribs['cid'] = '{0}{1}{2}{3}'.format(chr(random.randint(0, 255)), chr(random.randint(0, 255))
+        #                                            , chr(random.randint(0, 255)), chr(random.randint(0, 255)))
+        self.attribs['cid'] = urandom(4)
 
     def generate_vsn(self):
-        self.attribs['vsn'] = '{0}{1}{2}{3}'.format(chr(random.randint(0, 255)), chr(random.randint(0, 255))
-                                                    , chr(random.randint(0, 255)), chr(random.randint(0, 255)))
+        #self.attribs['vsn'] = '{0}{1}{2}{3}'.format(chr(random.randint(0, 255)), chr(random.randint(0, 255))
+        #                                            , chr(random.randint(0, 255)), chr(random.randint(0, 255)))
+        self.attribs['vsn'] = urandom(4)
 
     def description(self):
         return self._device_description
@@ -631,11 +647,11 @@ class Base(object):
          :return: the headre
         """
         try:
-            h = command                                 # Command UINT
+            h = command
             h += pack_uint(length)                      # Length UINT
             h += pack_dint(self._session)                # Session Handle UDINT
             h += pack_dint(0)                           # Status UDINT
-            h += self.attribs['context']                # Sender Context 8 bytes
+            h += self.attribs['context'].encode()                # Sender Context 8 bytes
             h += pack_dint(self.attribs['option'])      # Option UDINT
             return h
         except Exception as e:
@@ -671,14 +687,30 @@ class Base(object):
 
         :return: False if any error in the replayed message
         """
+
         if self._session == 0:
             self._status = (4, "A session need to be registered before to call forward_open.")
             raise CommError("A session need to be registered before to call forward open")
 
+        init_net_params = (True << 9) | (0 << 10) | (2 << 13) | (False << 15)
+        if self.attribs['large forward open']:
+            connection_size = 4002
+            net_params = pack_udint((connection_size & 0xFFFF) | init_net_params << 16)
+        else:
+            connection_size = 500
+            net_params = pack_uint((connection_size & 0x01FF) | init_net_params)
+
+        if self.__direct_connections:
+            connection_params = [CONNECTION_SIZE['Direct Network'], CLASS_ID["8-bit"], CLASS_CODE["Message Router"]]
+        else:
+            connection_params = [
+                CONNECTION_SIZE['Backplane'],
+            ]
+
         forward_open_msg = [
-            FORWARD_OPEN,
-            pack_usint(2),
-            CLASS_ID["8-bit"],
+            FORWARD_OPEN if not self.attribs['large forward open'] else LARGE_FORWARD_OPEN,  # '\x54'
+            pack_usint(2),  # CIP Path size
+            CLASS_ID["8-bit"],  # class type
             CLASS_CODE["Connection Manager"],  # Volume 1: 5-1
             INSTANCE_ID["8-bit"],
             CONNECTION_MANAGER_INSTANCE['Open Request'],
@@ -690,34 +722,22 @@ class Base(object):
             self.attribs['vid'],
             self.attribs['vsn'],
             TIMEOUT_MULTIPLIER,
-            '\x00\x00\x00',
-            pack_dint(self.attribs['rpi'] * 1000),
-            pack_uint(CONNECTION_PARAMETER['Default']),
-            pack_dint(self.attribs['rpi'] * 1000),
-            pack_uint(CONNECTION_PARAMETER['Default']),
-            TRANSPORT_CLASS,  # Transport Class
-            # CONNECTION_SIZE['Backplane'],
-            # pack_usint(self.attribs['backplane']),
-            # pack_usint(self.attribs['cpu slot']),
-            CLASS_ID["8-bit"],
-            CLASS_CODE["Message Router"],
+            b'\x00\x00\x00',
+            b'\x01\x40\x20\x00',
+            net_params,
+            b'\x01\x40\x20\x00',
+            net_params,
+            TRANSPORT_CLASS,
+            *connection_params,
+            pack_usint(self.attribs['backplane']),
+            pack_usint(self.attribs['cpu slot']),
+            b'\x20\x02',
             INSTANCE_ID["8-bit"],
             pack_usint(1)
         ]
 
-        if self.__direct_connections:
-            forward_open_msg[20:1] = [
-                CONNECTION_SIZE['Direct Network'],
-            ]
-        else:
-            forward_open_msg[20:3] = [
-                CONNECTION_SIZE['Backplane'],
-                pack_usint(self.attribs['backplane']),
-                pack_usint(self.attribs['cpu slot'])
-            ]
-
         if self.send_rr_data(
-                build_common_packet_format(DATA_ITEM['Unconnected'], ''.join(forward_open_msg), ADDRESS_ITEM['UCMM'],)):
+                build_common_packet_format(DATA_ITEM['Unconnected'], b''.join(forward_open_msg), ADDRESS_ITEM['UCMM'],)):
             self._target_cid = self._reply[44:48]
             self._target_is_connected = True
             return True
@@ -762,18 +782,18 @@ class Base(object):
         if self.__direct_connections:
             forward_close_msg[11:2] = [
                 CONNECTION_SIZE['Direct Network'],
-                '\x00'
+                b'\x00'
             ]
         else:
             forward_close_msg[11:4] = [
                 CONNECTION_SIZE['Backplane'],
-                '\x00',
+                b'\x00',
                 pack_usint(self.attribs['backplane']),
                 pack_usint(self.attribs['cpu slot'])
             ]
 
         if self.send_rr_data(
-                build_common_packet_format(DATA_ITEM['Unconnected'], ''.join(forward_close_msg), ADDRESS_ITEM['UCMM'])):
+                build_common_packet_format(DATA_ITEM['Unconnected'], b''.join(forward_close_msg), ADDRESS_ITEM['UCMM'])):
             self._target_is_connected = False
             return True
         self._status = (5, "forward_close returned False")
@@ -834,9 +854,6 @@ class Base(object):
                 if self.register_session() is None:
                     self._status = (13, "Session not registered")
                     return False
-
-                # not sure but maybe I can remove this because is used to clean up any previous unclosed connection
-                self.forward_close()
                 return True
             except Exception as e:
                 # self.clean_up()
@@ -869,22 +886,6 @@ class Base(object):
 
         if error_string:
             raise CommError(error_string)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     def clean_up(self):
         self.__sock = None
